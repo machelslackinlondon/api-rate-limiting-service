@@ -13,6 +13,7 @@ import { AdmissionController } from './domain/admission-controller';
 import { DomainError } from './domain/errors';
 import { RateLimiter } from './domain/rate-limiter';
 import type { RateLimitStore } from './domain/types';
+import { LimiterMetrics } from './metrics/metrics';
 import { InMemoryRateLimitStore } from './stores/in-memory-store';
 import {
   RedisRateLimitStore,
@@ -97,6 +98,7 @@ async function redisStore(
   config: AppConfig,
   clock: Clock,
   cleanupTargets: CleanupStore[],
+  metrics: LimiterMetrics,
 ): Promise<RateLimitStore> {
   if (config.redisUrl === undefined) {
     throw new Error('REDIS_URL is required when STORE_MODE is redis');
@@ -137,19 +139,25 @@ async function redisStore(
   cleanupTargets.push(fallback);
 
   return new ResilientRateLimitStore({
-    primary: new RedisRateLimitStore(executor),
+    primary: new RedisRateLimitStore(executor, {
+      observationClock: () => clock.now(),
+      maxObservedClients: config.maxClients,
+    }),
     fallback,
     clock,
     failurePolicy: config.failurePolicy,
     timeoutMs: config.redisTimeoutMs,
     cooldownMs: config.circuitCooldownMs,
     onStoreError(error) {
+      metrics.observeStoreError(error);
       app.log.warn({ err: error }, 'Redis limiter operation failed');
     },
     onFallback() {
+      metrics.observeFallback();
       app.log.warn('using local rate-limit fallback');
     },
     onCircuitStateChange(state) {
+      metrics.setCircuitState(state);
       app.log.info({ circuitState: state }, 'Redis limiter circuit changed');
     },
   });
@@ -163,6 +171,10 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   });
   const clock = options.clock ?? new SystemClock();
   const cleanupTargets: CleanupStore[] = [];
+  let limiter: RateLimiter | undefined;
+  const metrics = new LimiterMetrics({
+    activeClients: () => limiter?.activeClients() ?? 0,
+  });
   let store = options.store;
 
   if (store === undefined && options.config.storeMode === 'memory') {
@@ -170,14 +182,21 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     cleanupTargets.push(localStore);
     store = localStore;
   } else if (store === undefined) {
-    store = await redisStore(app, options.config, clock, cleanupTargets);
+    store = await redisStore(
+      app,
+      options.config,
+      clock,
+      cleanupTargets,
+      metrics,
+    );
   } else if (isCleanupStore(store)) {
     cleanupTargets.push(store);
   }
 
-  const limiter = new RateLimiter(
+  limiter = new RateLimiter(
     store,
     new AdmissionController(options.config.maxInFlight),
+    metrics,
   );
   const cleanupTimer = setInterval(() => {
     for (const target of cleanupTargets) {
@@ -187,7 +206,7 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   cleanupTimer.unref();
 
   registerErrorHandler(app);
-  await registerRoutes(app, { config: options.config, limiter });
+  await registerRoutes(app, { config: options.config, limiter, metrics });
   app.addHook('onClose', async () => {
     clearInterval(cleanupTimer);
     await limiter.close();

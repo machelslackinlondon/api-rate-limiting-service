@@ -93,4 +93,24 @@ describe('RedisRateLimitStore', () => {
     await store.close();
     expect(executor.closed).toBe(true);
   });
+
+  test('reports bounded process-observed active clients until reset', async () => {
+    let now = 1000;
+    const executor = new FakeExecutor([1, 1, 2000, 1000, 0, 0]);
+    const store = new RedisRateLimitStore(executor, {
+      observationClock: () => now,
+      maxObservedClients: 2,
+    });
+
+    await store.check({ clientId: 'client-a', limit: 2, windowMs: 1000 });
+    await store.check({ clientId: 'client-a', limit: 2, windowMs: 1000 });
+    await store.check({ clientId: 'client-b', limit: 2, windowMs: 1000 });
+    expect(store.activeClients()).toBe(2);
+
+    await store.check({ clientId: 'client-c', limit: 2, windowMs: 1000 });
+    expect(store.activeClients()).toBe(2);
+
+    now = 2000;
+    expect(store.activeClients()).toBe(0);
+  });
 });

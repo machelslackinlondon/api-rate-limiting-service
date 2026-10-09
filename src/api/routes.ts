@@ -3,11 +3,13 @@ import type { FastifyInstance } from 'fastify';
 import type { AppConfig } from '../config/config';
 import type { RateLimiter } from '../domain/rate-limiter';
 import type { RateLimitCommand } from '../domain/types';
+import type { LimiterMetrics } from '../metrics/metrics';
 import { checkSchema } from './schemas';
 
 export interface RegisterRoutesOptions {
   config: AppConfig;
   limiter: RateLimiter;
+  metrics: LimiterMetrics;
 }
 
 export async function registerRoutes(
@@ -36,5 +38,11 @@ export async function registerRoutes(
   app.get('/health', async (_request, reply) => {
     const health = options.limiter.health();
     return reply.code(health.status === 'unhealthy' ? 503 : 200).send(health);
+  });
+
+  app.get('/metrics', async (_request, reply) => {
+    return reply
+      .header('Content-Type', options.metrics.contentType)
+      .send(await options.metrics.render());
   });
 }

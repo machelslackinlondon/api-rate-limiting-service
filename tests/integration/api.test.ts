@@ -28,8 +28,15 @@ class PendingStore implements RateLimitStore {
     });
   }
 
+  constructor(
+    private readonly storeHealth: StoreHealth = {
+      status: 'healthy',
+      mode: 'memory',
+    },
+  ) {}
+
   health(): StoreHealth {
-    return { status: 'healthy', mode: 'memory' };
+    return this.storeHealth;
   }
 
   activeClients(): number {
@@ -214,5 +221,58 @@ describe('rate limit API', () => {
 
     await app.close();
     expect(store.closed).toBe(true);
+  });
+
+  test('exposes Prometheus metrics without client labels', async () => {
+    const app = await memoryApp();
+    await app.inject({
+      method: 'POST',
+      url: '/check',
+      payload: { clientId: 'private-client', limit: 2, windowMs: 1000 },
+    });
+
+    const response = await app.inject({ method: 'GET', url: '/metrics' });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/plain');
+    expect(response.body).toContain('rate_limiter_requests_total');
+    expect(response.body).not.toContain('private-client');
+  });
+
+  test('reports fail-open degradation as available', async () => {
+    const store = new PendingStore({
+      status: 'degraded',
+      mode: 'fallback',
+      circuitState: 'open',
+      detail: 'Redis unavailable; using local fallback',
+    });
+    const app = await buildApp({
+      config: loadConfig({ LOG_LEVEL: 'silent' }),
+      store,
+      clock: new FakeClock(1000),
+    });
+    apps.push(app);
+
+    const response = await app.inject({ method: 'GET', url: '/health' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: 'degraded', mode: 'fallback' });
+  });
+
+  test('reports fail-closed store failure as unavailable', async () => {
+    const store = new PendingStore({
+      status: 'unhealthy',
+      mode: 'redis',
+      circuitState: 'open',
+      detail: 'Redis unavailable; fail-closed policy is active',
+    });
+    const app = await buildApp({
+      config: loadConfig({ LOG_LEVEL: 'silent' }),
+      store,
+      clock: new FakeClock(1000),
+    });
+    apps.push(app);
+
+    const response = await app.inject({ method: 'GET', url: '/health' });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ status: 'unhealthy', mode: 'redis' });
   });
 });
