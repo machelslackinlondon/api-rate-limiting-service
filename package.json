@@ -1,0 +1,44 @@
+{
+  "name": "api-rate-limiting-service",
+  "version": "1.0.0",
+  "description": "Production-minded API rate limiting service in Node.js and TypeScript",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "jest --runInBand",
+    "test:watch": "jest --watch",
+    "test:redis": "RUN_REDIS_TESTS=1 jest tests/integration/redis-store.test.ts --runInBand",
+    "start": "node dist/server.js",
+    "load:test": "node load-tests/run.cjs hot",
+    "load:test:all": "node load-tests/run.cjs all"
+  },
+  "engines": {
+    "node": ">=24.21.0 <25"
+  },
+  "keywords": [
+    "rate-limiting",
+    "fastify",
+    "redis",
+    "typescript"
+  ],
+  "author": "machelslackinlondon",
+  "license": "MIT",
+  "dependencies": {
+    "@prometheus-io/client": "^0.16.1",
+    "fastify": "^5.12.5",
+    "redis": "^6.3.0"
+  },
+  "devDependencies": {
+    "@jest/globals": "^30.5.2",
+    "@swc/core": "^1.16.13",
+    "@swc/jest": "^0.2.39",
+    "@types/node": "^24.19.1",
+    "autocannon": "^8.0.0",
+    "jest": "^30.5.2",
+    "typescript": "^7.0.2"
+  },
+  "allowScripts": {
+    "@swc/core@1.16.13": true
+  }
+}
