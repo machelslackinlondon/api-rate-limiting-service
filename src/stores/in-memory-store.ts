@@ -1,6 +1,6 @@
 import { TimestampQueue } from '../algorithms/timestamp-queue';
 import type { Clock } from '../domain/clock';
-import { PolicyConflictError } from '../domain/errors';
+import { CapacityError, PolicyConflictError } from '../domain/errors';
 import type {
   RateLimitCommand,
   RateLimitDecision,
@@ -52,16 +52,8 @@ export class InMemoryRateLimitStore implements RateLimitStore {
       throw new PolicyConflictError({ ...state.policy });
     }
 
-    if (state === undefined) {
-      state = {
-        policy: { limit: command.limit, windowMs: command.windowMs },
-        timestamps: new TimestampQueue(),
-      };
-      this.#clients.set(command.clientId, state);
-    }
-
-    const oldest = state.timestamps.oldest();
-    if (state.timestamps.length >= command.limit) {
+    const oldest = state?.timestamps.oldest();
+    if (state !== undefined && state.timestamps.length >= command.limit) {
       if (oldest === undefined) {
         throw new Error('active timestamp queue is unexpectedly empty');
       }
@@ -75,8 +67,19 @@ export class InMemoryRateLimitStore implements RateLimitStore {
       };
     }
 
+    if (state === undefined) {
+      this.#ensureClientCapacity();
+      state = {
+        policy: { limit: command.limit, windowMs: command.windowMs },
+        timestamps: new TimestampQueue(),
+      };
+    }
+
+    this.#ensureTimestampCapacity(state);
+
     state.timestamps.push(now);
     this.#totalTimestamps += 1;
+    this.#clients.set(command.clientId, state);
     const resetAt = (state.timestamps.oldest() ?? now) + command.windowMs;
 
     return {
@@ -97,13 +100,60 @@ export class InMemoryRateLimitStore implements RateLimitStore {
 
   async close(): Promise<void> {}
 
-  #pruneState(state: ClientState, cutoff: number): void {
-    this.#totalTimestamps -= state.timestamps.prune(cutoff);
+  cleanup(): { clientsRemoved: number; timestampsRemoved: number } {
+    const now = this.#clock.now();
+    let clientsRemoved = 0;
+    let timestampsRemoved = 0;
+
+    for (const [clientId, state] of this.#clients) {
+      timestampsRemoved += this.#pruneState(
+        state,
+        now - state.policy.windowMs,
+      );
+      if (state.timestamps.length === 0) {
+        this.#clients.delete(clientId);
+        clientsRemoved += 1;
+      }
+    }
+
+    return { clientsRemoved, timestampsRemoved };
+  }
+
+  #pruneState(state: ClientState, cutoff: number): number {
+    const removed = state.timestamps.prune(cutoff);
+    this.#totalTimestamps -= removed;
+    return removed;
   }
 
   #samePolicy(active: RateLimitPolicy, requested: RateLimitPolicy): boolean {
     return (
       active.limit === requested.limit && active.windowMs === requested.windowMs
     );
+  }
+
+  #ensureClientCapacity(): void {
+    if (this.#clients.size < this.#maxClients) {
+      return;
+    }
+
+    this.cleanup();
+    if (this.#clients.size >= this.#maxClients) {
+      throw new CapacityError('maximum tracked clients reached');
+    }
+  }
+
+  #ensureTimestampCapacity(state: ClientState): void {
+    if (state.timestamps.length >= this.#maxTimestampsPerClient) {
+      throw new CapacityError('maximum timestamps per client reached');
+    }
+
+    if (this.#totalTimestamps < this.#maxTotalTimestamps) {
+      return;
+    }
+
+    this.cleanup();
+    if (this.#totalTimestamps >= this.#maxTotalTimestamps) {
+      throw new CapacityError('maximum total timestamps reached');
+    }
   }
 }
