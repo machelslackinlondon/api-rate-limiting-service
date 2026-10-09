@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+.env
+*.log
+
+# Internal design workflow; do not publish to GitHub.
+docs/superpowers/
