@@ -4,5 +4,7 @@ coverage/
 .env
 *.log
 
-# Internal design workflow; do not publish to GitHub.
-docs/superpowers/
+# Documentation policy: publish only the root onboarding README.
+/docs/
+*.md
+!/README.md

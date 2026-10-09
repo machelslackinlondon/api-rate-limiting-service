@@ -27,10 +27,14 @@ jobs:
         with:
           node-version: 24.21.0
           cache: npm
-      - name: Ensure internal workflow documents are not tracked
+      - name: Ensure README is the only tracked documentation
         run: |
-          if git ls-files docs/superpowers | grep -q .; then
-            echo "docs/superpowers must remain local-only"
+          if git ls-files docs | grep -q .; then
+            echo "The docs directory must remain local-only"
+            exit 1
+          fi
+          if git ls-files '*.md' | grep -vFx README.md | grep -q .; then
+            echo "README.md must be the only tracked Markdown document"
             exit 1
           fi
       - run: npm ci
